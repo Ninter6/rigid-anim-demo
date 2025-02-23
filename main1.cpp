@@ -300,6 +300,19 @@ vec3 vec_grad(const vec3& v0, const vec3& v1, const vec3& v2, float t0, float t1
     return lerp(d0, d1, (t1 - t0) / (t2 - t0));
 }
 
+vec3 vec3_lerp(const vec3& v0, const vec3& v1, const vec3& m0, const vec3& m1, float t) {
+    const auto t3 = t*t*t, t2 = t*t;
+    const auto h00 = 2*t3 - 3*t2 + 1;
+    const auto h01 = 3*t2 - 2*t3;
+    const auto h10 = t3 - 2*t2 + t;
+    const auto h11 = t3 - t2;
+    return v0*h00 + v1*h01 + m0*h10 + m1*h11;
+}
+
+quat quat_lerp(const quat& q0, const quat& q1, const quat& m0, const quat& m1, float t) {
+    return slerp(slerp(q0, q1, t), slerp(m0, m1, t), 2*t*(1-t));
+}
+
 }
 
 struct Animation {
@@ -356,14 +369,7 @@ vec3 Animation::pos_at(uint32_t id, float t) {
 
     auto& [v0, m0, t0] = *(i-1);
     auto& [v1, m1, t1] = *i;
-    t = (t - t0) / (t1 - t0);
-    const auto t3 = t*t*t, t2 = t*t;
-    const auto h00 = 2*t3 - 3*t2 + 1;
-    const auto h01 = 3*t2 - 2*t3;
-    const auto h10 = t3 - 2*t2 + t;
-    const auto h11 = t3 - t2;
-
-    return v0*h00 + v1*h01 + m0*h10 + m1*h11;
+    return algo::vec3_lerp(v0, v1, m0, m1, (t - t0) / (t1 - t0));
 }
 
 quat Animation::rot_at(uint32_t id, float t) {
@@ -384,9 +390,7 @@ quat Animation::rot_at(uint32_t id, float t) {
 
     auto& [v0, m0, t0] = *(i-1);
     auto& [v1, m1, t1] = *i;
-
-    t = (t - t0) / (t1 - t0);
-    return slerp(slerp(v0, v1, t), slerp(m0, m1, t), 2*t*(1-t));
+    return algo::quat_lerp(v0, v1, m0, m1, (t - t0) / (t1 - t0));
 }
 
 struct Bone {
