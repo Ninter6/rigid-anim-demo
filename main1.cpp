@@ -277,8 +277,28 @@ struct axis_info {
 
 namespace algo {
 
-quat quat_grad(const quat& q0, const quat& q1, const quat& q2);
-vec3 vec_grad(const vec3& v0, const vec3& v1, const vec3& v2, float t0, float t1, float t2);
+constexpr auto ln(const quat& q) {
+    auto& [w, x, y, z] = q.asArray;
+    return vec3(x, y, z)*(acos(w)/sqrt(1-w*w));
+}
+constexpr quat exp(const vec3& v) {
+    auto l = v.length();
+    if (l < 1e-4f) return {};
+    return {cos(l), v*(sin(l)/l)};
+}
+
+quat quat_grad(const quat& q0, const quat& q1, const quat& q2) {
+    auto q1s = q1.conjugate();
+    auto lnq1sq0 = ln(q1s*q0);
+    auto lnq1sq2 = ln(q1s*q2);
+    return q1 * exp((lnq1sq0+lnq1sq2) * -.25f);
+}
+
+vec3 vec_grad(const vec3& v0, const vec3& v1, const vec3& v2, float t0, float t1, float t2) {
+    auto d0 = (v1 - v0) / (t1 - t0);
+    auto d1 = (v2 - v1) / (t2 - t1);
+    return lerp(d0, d1, (t1 - t0) / (t2 - t0));
+}
 
 }
 
@@ -304,6 +324,70 @@ struct Animation {
     float duration = 1.f;
     play_mode mode = repeat;
 };
+
+void Animation::calcu_grad() {
+    for (auto& [id, _] : info)
+        calcu_grad(id);
+}
+
+void Animation::calcu_grad(uint32_t id) {
+    auto& f = info[id];
+    for (auto i = f.pos_b + 1, e = f.pos_n + f.pos_b -1; i < e; ++i)
+        pos[i].m = algo::vec_grad(pos[i-1].v, pos[i].v, pos[i+1].v, pos[i-1].t, pos[i].t, pos[i+1].t);
+    for (auto i = f.rot_b + 1, e = f.rot_n + f.rot_b -1; i < e; ++i)
+        rot[i].m = algo::quat_grad(rot[i-1].v, rot[i].v, rot[i+1].v);
+}
+
+vec3 Animation::pos_at(uint32_t id, float t) {
+    if (t < 0 || t > duration)
+        switch (mode) {
+            case repeat: t = fmod(t, duration); break;
+            case clamp: t = std::clamp(t, 0.f, duration); break;
+            default: throw std::runtime_error("Invalid play mode");
+        }
+
+    auto& f = info[id];
+    auto b = pos.begin() + f.pos_b, e = b + f.pos_n;
+    auto i = std::lower_bound(b, e, t, [](const key_vec3& k, float t) {
+        return k.t < t;
+    });
+    if (i == b || i->t - t < 1e-4f) return i->v;
+    if (i == e) return (i-1)->v;
+
+    auto& [v0, m0, t0] = *(i-1);
+    auto& [v1, m1, t1] = *i;
+    t = (t - t0) / (t1 - t0);
+    const auto t3 = t*t*t, t2 = t*t;
+    const auto h00 = 2*t3 - 3*t2 + 1;
+    const auto h01 = 3*t2 - 2*t3;
+    const auto h10 = t3 - 2*t2 + t;
+    const auto h11 = t3 - t2;
+
+    return v0*h00 + v1*h01 + m0*h10 + m1*h11;
+}
+
+quat Animation::rot_at(uint32_t id, float t) {
+    if (t < 0 || t > duration)
+        switch (mode) {
+            case repeat: t = fmod(t, duration); break;
+            case clamp: t = std::clamp(t, 0.f, duration); break;
+            default: throw std::runtime_error("Invalid play mode");
+        }
+
+    auto& f = info[id];
+    auto b = rot.begin() + f.rot_b, e = b + f.rot_n;
+    auto i = std::lower_bound(b, e, t, [](const key_quat& k, float t) {
+        return k.t < t;
+    });
+    if (i == b || i->t - t < 1e-4f) return i->v;
+    if (i == e) return (i-1)->v;
+
+    auto& [v0, m0, t0] = *(i-1);
+    auto& [v1, m1, t1] = *i;
+
+    t = (t - t0) / (t1 - t0);
+    return slerp(slerp(v0, v1, t), slerp(m0, m1, t), 2*t*(1-t));
+}
 
 struct Bone {
     std::unordered_map<uint32_t, Joint> joints;
@@ -483,7 +567,7 @@ void anim_manager::parse_bone(const nlohmann::json& j) {
             curr.pos = t[3];
             curr.rot = quat_cast(t);
 
-
+            // TODO
         }
     }
 
