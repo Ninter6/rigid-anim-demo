@@ -1,0 +1,7 @@
+n aiden
+b body.png 8 14 4
+h head.png 8 8 8
+al arm_left.png 4 14 4
+ar arm_right.png 4 14 4
+ll leg_left.png 4 14 4
+lr leg_right.png 4 14 4
