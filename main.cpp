@@ -12,8 +12,6 @@
 #include "glad/glad.h"
 #include "GLFW/glfw3.h"
 
-#include "get_lines.h"
-
 #include "mathpls.h"
 
 using namespace mathpls;

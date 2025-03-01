@@ -6,9 +6,11 @@
 #include <fstream>
 #include <cctype>
 #include <cassert>
-#include <unordered_map>
 #include <map>
 #include <span>
+#include <optional>
+#include <algorithm>
+#include <unordered_map>
 
 #include "glad/glad.h"
 #include <GLFW/glfw3.h>
@@ -265,9 +267,22 @@ using key_vec3 = key_unit<vec3>;
 using key_quat = key_unit<quat>;
 
 struct Model {
+    struct cube_info { uint32_t cur, par; };
 
-    std::unordered_map<uint32_t, Cube> cubes;
+    Model() = default;
+
+    size_t find(uint32_t id);
+
+    std::vector<Cube> cubes;
+    std::vector<cube_info> info;
 };
+
+size_t Model::find(uint32_t id) {
+    auto i = std::lower_bound(info.begin(), info.end(), id, [](auto&& a, auto&& b) {
+        return a.cur < b;
+    }) - info.begin();
+    return i != info.size() && info[i].cur == id ? i : SIZE_MAX;
+}
 
 struct axis_info {
     uint32_t pos_b, pos_n;
@@ -277,11 +292,11 @@ struct axis_info {
 
 namespace algo {
 
-constexpr auto ln(const quat& q) {
+vec3 ln(const quat& q) {
     auto& [w, x, y, z] = q.asArray;
     return vec3(x, y, z)*(acos(w)/sqrt(1-w*w));
 }
-constexpr quat exp(const vec3& v) {
+quat exp(const vec3& v) {
     auto l = v.length();
     if (l < 1e-4f) return {};
     return {cos(l), v*(sin(l)/l)};
@@ -300,7 +315,15 @@ vec3 vec_grad(const vec3& v0, const vec3& v1, const vec3& v2, float t0, float t1
     return lerp(d0, d1, (t1 - t0) / (t2 - t0));
 }
 
-vec3 vec3_lerp(const vec3& v0, const vec3& v1, const vec3& m0, const vec3& m1, float t) {
+vec3 vec3_flat(const vec3& v0, const vec3& v1, float t) {
+    return lerp(v0, v1, t);
+}
+
+quat quat_flat(const quat& q0, const quat& q1, float t) {
+    return slerp(q0, q1, t);
+}
+
+vec3 vec3_smooth(const vec3& v0, const vec3& v1, const vec3& m0, const vec3& m1, float t) {
     const auto t3 = t*t*t, t2 = t*t;
     const auto h00 = 2*t3 - 3*t2 + 1;
     const auto h01 = 3*t2 - 2*t3;
@@ -309,8 +332,10 @@ vec3 vec3_lerp(const vec3& v0, const vec3& v1, const vec3& m0, const vec3& m1, f
     return v0*h00 + v1*h01 + m0*h10 + m1*h11;
 }
 
-quat quat_lerp(const quat& q0, const quat& q1, const quat& m0, const quat& m1, float t) {
-    return slerp(slerp(q0, q1, t), slerp(m0, m1, t), 2*t*(1-t));
+quat quat_smooth(const quat& q0, const quat& q1, const quat& m0, const quat& m1, float t) {
+    auto a = slerp(q0, q1, t);
+    auto b = slerp(m0, m1, t);
+    return slerp(a, b, 2*t*(1-t));
 }
 
 }
@@ -322,14 +347,10 @@ struct Animation {
     void calcu_grad();
     void calcu_grad(uint32_t id);
 
-    void apply(float t,
-        const std::function<bool(uint32_t)>& need_pos,
-        const std::function<bool(uint32_t)>& need_rot,
-        const std::function<void(uint32_t, const vec3&)>& push_pos,
-        const std::function<void(uint32_t, const vec3&)>& push_rot);
+    void apply_to_model(float t, Model& m) const;
 
-    vec3 pos_at(uint32_t id, float t);
-    quat rot_at(uint32_t id, float t);
+    vec3 pos_at(uint32_t id, float t) const;
+    quat rot_at(uint32_t id, float t) const;
 
     std::unordered_map<uint32_t, axis_info> info;
     std::vector<key_vec3> pos;
@@ -344,22 +365,32 @@ void Animation::calcu_grad() {
 }
 
 void Animation::calcu_grad(uint32_t id) {
-    auto& f = info[id];
-    for (auto i = f.pos_b + 1, e = f.pos_n + f.pos_b -1; i < e; ++i)
+    const auto& f = info[id];
+    auto pb = f.pos_b, pe = pb + f.pos_n;
+    auto rb = f.rot_b, re = rb + f.rot_n;
+    if (!f.pos_flat) for (auto i = pb+1; i+1 < pe; ++i)
         pos[i].m = algo::vec_grad(pos[i-1].v, pos[i].v, pos[i+1].v, pos[i-1].t, pos[i].t, pos[i+1].t);
-    for (auto i = f.rot_b + 1, e = f.rot_n + f.rot_b -1; i < e; ++i)
+    if (!f.rot_flat) for (auto i = rb+1; i+1 < re; ++i)
         rot[i].m = algo::quat_grad(rot[i-1].v, rot[i].v, rot[i+1].v);
+    if (mode == repeat) {
+        // assume the last is the same as the first
+        if (!f.pos_flat && f.pos_n > 2)
+            pos[pe-1].m = pos[pb].m = algo::vec_grad(pos[pe-2].v, pos[pb].v, pos[pb+1].v, pos[pe-2].t-duration, pos[pb].t, pos[pb+1].t);
+        if (!f.rot_flat && f.rot_n > 2)
+            rot[re-1].m = rot[rb].m = algo::quat_grad(rot[re-2].v, rot[rb].v, rot[rb+1].v);
+    }
 }
 
-vec3 Animation::pos_at(uint32_t id, float t) {
+vec3 Animation::pos_at(uint32_t id, float t) const {
+    assert(info.contains(id) && info.at(id).pos_n > 0);
     if (t < 0 || t > duration)
         switch (mode) {
-            case repeat: t = fmod(t, duration); break;
+            case repeat: t = fmodf(t, duration); break;
             case clamp: t = std::clamp(t, 0.f, duration); break;
             default: throw std::runtime_error("Invalid play mode");
         }
 
-    auto& f = info[id];
+    auto& f = info.at(id);
     auto b = pos.begin() + f.pos_b, e = b + f.pos_n;
     auto i = std::lower_bound(b, e, t, [](const key_vec3& k, float t) {
         return k.t < t;
@@ -369,18 +400,21 @@ vec3 Animation::pos_at(uint32_t id, float t) {
 
     auto& [v0, m0, t0] = *(i-1);
     auto& [v1, m1, t1] = *i;
-    return algo::vec3_lerp(v0, v1, m0, m1, (t - t0) / (t1 - t0));
+    return f.pos_flat ?
+        algo::vec3_flat(v0, v1, (t - t0) / (t1 - t0)) :
+        algo::vec3_smooth(v0, v1, m0, m1, (t - t0) / (t1 - t0));
 }
 
-quat Animation::rot_at(uint32_t id, float t) {
+quat Animation::rot_at(uint32_t id, float t) const {
+    assert(info.contains(id) && info.at(id).rot_n > 0);
     if (t < 0 || t > duration)
         switch (mode) {
-            case repeat: t = fmod(t, duration); break;
+            case repeat: t = fmodf(t, duration); break;
             case clamp: t = std::clamp(t, 0.f, duration); break;
             default: throw std::runtime_error("Invalid play mode");
         }
 
-    auto& f = info[id];
+    auto& f = info.at(id);
     auto b = rot.begin() + f.rot_b, e = b + f.rot_n;
     auto i = std::lower_bound(b, e, t, [](const key_quat& k, float t) {
         return k.t < t;
@@ -390,11 +424,33 @@ quat Animation::rot_at(uint32_t id, float t) {
 
     auto& [v0, m0, t0] = *(i-1);
     auto& [v1, m1, t1] = *i;
-    return algo::quat_lerp(v0, v1, m0, m1, (t - t0) / (t1 - t0));
+
+    return f.rot_flat ?
+        algo::quat_flat(v0, v1, (t - t0) / (t1 - t0)) :
+        algo::quat_smooth(v0, v1, m0, m1, (t - t0) / (t1 - t0));
+}
+
+void Animation::apply_to_model(float t, Model& m) const {
+    assert(m.cubes.size() == m.info.size());
+    for (int i = 0; i < m.info.size(); ++i) {
+        auto [cur, par] = m.info[i];
+        auto& c = m.cubes[i];
+        if (auto it = info.find(cur); it != info.end()) {
+            auto& f = it->second;
+            if (f.pos_n > 0) c.pos = pos_at(cur, t);
+            if (f.rot_n > 0) c.rot = rot_at(cur, t);
+        }
+        if (par != -1) {
+            auto& p = m.cubes[m.find(par)];
+            auto tr = p.local() * c.local();
+            c.pos = tr[3];
+            c.rot = quat_cast(tr);
+        }
+    }
 }
 
 struct Bone {
-    std::unordered_map<uint32_t, Joint> joints;
+    // std::unordered_map<uint32_t, Joint> joints;
     std::unordered_map<std::string, Animation> anims;
 };
 
@@ -418,7 +474,7 @@ private:
 };
 
 void anim_manager::load_model(std::string_view file) {
-    std::ifstream ifs{file};
+    std::ifstream ifs{{file.data(), file.size()}};
     auto json = nlohmann::json::parse(ifs);
 
     if (json.is_array())
@@ -428,7 +484,7 @@ void anim_manager::load_model(std::string_view file) {
 }
 
 void anim_manager::load_bone(std::string_view file) {
-    std::ifstream ifs{file};
+    std::ifstream ifs{{file.data(), file.size()}};
     auto json = nlohmann::json::parse(ifs);
 
     if (json.is_array())
@@ -447,36 +503,23 @@ void anim_manager::parse_model(const nlohmann::json& j) {
         return;
     }
 
-    auto& cubes = it->second.cubes;
+    auto& model = it->second;
+    std::map<uint32_t, std::pair<Model::cube_info, Cube>> cubes;
     assert(j["cubes"].is_object());
     for (auto&& [k, v] : j["cubes"].items()) {
         assert(v.is_object());
-        auto& c = cubes[s2id(k)];
+        auto& [i, c] = cubes[s2id(k)];
+        i = {s2id(k), v.contains("parent") ?
+            s2id(v["parent"].get<std::string>()) : -1};
         if (v.contains("pos")) c.pos = j2vec3(v["pos"]);
         if (v.contains("ext")) c.ext = j2vec3(v["ext"]);
         if (v.contains("cnt")) c.cnt = j2vec3(v["cnt"]);
         if (v.contains("rot")) c.rot = j2quat(v["rot"]);
     }
-
-    if (j.contains("completed") && j["completed"] == false) {
-        std::map<uint32_t, uint32_t> p;
-        for (auto&& [k, v] : j["cubes"].items()) {
-            if (v.contains("parent")) {
-                p.emplace(s2id(k), s2id(v["parent"].get<std::string>()));
-            }
-        }
-        for (auto&& [n, m] : p) {
-            auto& curr = cubes[n];
-            auto& parent = cubes[m];
-            auto t = parent.local() * curr.local();
-            curr.pos = t[3];
-            curr.rot = quat_cast(t);
-        }
+    for (auto&& [_, p] : cubes) {
+        model.info.push_back(p.first);
+        model.cubes.push_back(p.second);
     }
-}
-
-void unfold() {
-
 }
 
 void anim_manager::parse_bone(const nlohmann::json& j) {
@@ -503,7 +546,7 @@ void anim_manager::parse_bone(const nlohmann::json& j) {
         if (v.contains("mode"))
             a.mode = v["mode"] == "repeat" ? Animation::repeat : Animation::clamp;
 
-        for (auto&& [k, u] : v.items()) {
+        for (auto&& [k, u] : v["axes"].items()) {
             auto [it, succ] = a.info.try_emplace(s2id(k));
             if (!succ) {
                 std::cerr << "Duplicate axis in animation: " << k << " in bone: " << j["name"] << std::endl;
@@ -521,7 +564,7 @@ void anim_manager::parse_bone(const nlohmann::json& j) {
                 if (upos.contains("flat")) info.pos_flat = upos["flat"];
                 if (info.pos_n == 0) continue;
                 info.pos_b = a.pos.size();
-                std::transform(keys.begin(), keys.end(), std::back_inserter(a), [](auto&& p) {
+                std::transform(keys.begin(), keys.end(), std::back_inserter(a.pos), [](auto&& p) {
                     return key_vec3{ .v = j2vec3(p["v"]), .t = p["t"] };
                 });
                 std::stable_sort(a.pos.data() + info.pos_b, a.pos.data() + info.pos_b + info.pos_n, [](auto&& a, auto&& b) {
@@ -537,50 +580,51 @@ void anim_manager::parse_bone(const nlohmann::json& j) {
                 if (urot.contains("flat")) info.rot_flat = urot["flat"];
                 if (info.rot_n == 0) continue;
                 info.rot_b = a.rot.size();
-                std::transform(keys.begin(), keys.end(), std::back_inserter(a), [](auto&& p) {
-                    return key_vec3{ .v = j2quat(p["v"]), .t = p["t"] };
+                std::transform(keys.begin(), keys.end(), std::back_inserter(a.rot), [](auto&& p) {
+                    return key_quat{ .v = j2quat(p["v"]), .t = p["t"] };
                 });
                 std::stable_sort(a.rot.data() + info.rot_b, a.rot.data() + info.rot_b + info.rot_n, [](auto&& a, auto&& b) {
                     return a.t < b.t;
                 });
             }
         }
-    }
-
-    if (j.contains("completed") && j["completed"] == false) {
-        assert(j.contains("joints") && j["joints"].is_object());
-        auto& jnts = it->second.joints;
-        std::map<uint32_t, uint32_t> p;
-        for (auto&& [k, v] : j["joints"].items()) {
-            auto [it, succ] = jnts.try_emplace(s2id(k));
-            if (!succ) {
-                std::cerr << "Duplicate joint: " << k << " in bone: " << j["name"] << std::endl;
-                continue;
-            }
-            auto& jnt = it->second;
-            assert(v.is_object());
-            if (v.contains("pos")) jnt.pos = j2vec3(v["pos"]);
-            if (v.contains("rot")) jnt.rot = j2quat(v["pos"]);
-            if (v.contains("parent"))
-                p.emplace(s2id(k), s2id(v["parent"].get<std::string>()));
-        }
-        for (auto&& [n, m] : p) {
-            Cube curr = { .pos = jnts[n].pos, .rot = jnts[n].rot };
-            Cube parent = { .pos = jnts[m].pos, .rot = jnts[m].rot };
-            auto t = parent.local() * curr.local();
-            curr.pos = t[3];
-            curr.rot = quat_cast(t);
-
-            // TODO
-        }
-    }
-
-    for (auto&& [n, a] : anims)
         a.calcu_grad();
+    }
+
+    // if (j.contains("completed") && j["completed"] == false) {
+    //     assert(j.contains("joints") && j["joints"].is_object());
+    //     auto& jnts = it->second.joints;
+    //     std::map<uint32_t, uint32_t> p;
+    //     for (auto&& [k, v] : j["joints"].items()) {
+    //         auto [it, succ] = jnts.try_emplace(s2id(k));
+    //         if (!succ) {
+    //             std::cerr << "Duplicate joint: " << k << " in bone: " << j["name"] << std::endl;
+    //             continue;
+    //         }
+    //         auto& jnt = it->second;
+    //         assert(v.is_object());
+    //         if (v.contains("pos")) jnt.pos = j2vec3(v["pos"]);
+    //         if (v.contains("rot")) jnt.rot = j2quat(v["pos"]);
+    //         if (v.contains("parent"))
+    //             p.emplace(s2id(k), s2id(v["parent"].get<std::string>()));
+    //     }
+    //     for (auto&& [n, m] : p) {
+    //         Cube curr = { .pos = jnts[n].pos, .rot = jnts[n].rot };
+    //         Cube parent = { .pos = jnts[m].pos, .rot = jnts[m].rot };
+    //         auto t = parent.local() * curr.local();
+    //         curr.pos = t[3];
+    //         curr.rot = quat_cast(t);
+    //
+    //         // TODO
+    //     }
+    // }
+
+    // for (auto&& [n, a] : anims)
+    //     a.calcu_grad();
 }
 
 void add_model(const Model& m) {
-    for (auto&& [n, c] : m.cubes)
+    for (auto&& c : m.cubes)
         add_cube(c);
 }
 
@@ -589,6 +633,7 @@ int main() {
 
     anim_manager anim;
     anim.load_model(FILE_ROOT"test.json");
+    anim.load_bone(FILE_ROOT"man.json");
 
     while (!glfwWindowShouldClose(window)) {
         glClearColor(.2, .3, .3, 1.);
@@ -600,8 +645,11 @@ int main() {
         glUniformMatrix4fv(glGetUniformLocation(sh, "view"), 1, GL_FALSE,
             lookAt(cam, vec3{0}, vec3{0, 1, 0}).value_ptr());
 
+        auto m = anim.models["test"];
+        anim.bones["man"].anims["run"].apply_to_model(glfwGetTime(), m);
+
         // anim.models["test"].cubes[s2id("K0")].rot = quat({1, 0, 0}, glfwGetTime());
-        add_model(anim.models["test"]);
+        add_model(m);
         draw_cube();
         clear_cube();
 

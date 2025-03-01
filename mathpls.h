@@ -783,22 +783,22 @@ struct qua{
 
     constexpr qua operator+() const {return *this;}
     constexpr qua operator-() const {return qua(T(0)) - *this;}
-    constexpr qua operator+(T k) const {return qua(x + k, y + k, z + k, w + k);};
-    constexpr qua& operator+=(T k){x += k;y += k;z += k;w += k;return *this;}
-    constexpr qua operator-(T k) const {return qua(x - k, y - k, z - k, w - k);};
-    constexpr qua& operator-=(T k) {x -= k;y -= k;z -= k;w -= k;return *this;}
-    constexpr qua operator*(T k) const {return qua(x * k, y * k, z * k, w * k);};
-    constexpr qua& operator*=(T k) {x *= k;y *= k;z *= k;w *= k;return *this;}
-    constexpr qua operator/(T k) const {return qua(x / k, y / k, z / k, w / k);};
-    constexpr qua& operator/=(T k) {x /= k;y /= k;z /= k;w /= k;return *this;}
-    constexpr qua operator+(qua k) const {return qua(x+k.x, y+k.y, z+k.z, w+k.w);}
-    constexpr qua& operator+=(qua k) {x += k.x;y += k.y;z += k.z;w += k.w;return *this;}
-    constexpr qua operator-(qua k) const {return qua(x-k.x, y-k.y, z-k.z, w-k.w);}
-    constexpr qua& operator-=(qua k) {x -= k.x;y -= k.y;z -= k.z;w -= k.w;return *this;}
+    constexpr qua operator+(T k) const {return qua(w + k, x + k, y + k, z + k);};
+    constexpr qua& operator+=(T k){w += k;x += k;y += k;z += k;return *this;}
+    constexpr qua operator-(T k) const {return qua(w - k, x - k, y - k, z - k);};
+    constexpr qua& operator-=(T k) {w -= k;x -= k;y -= k;z -= k;return *this;}
+    constexpr qua operator*(T k) const {return qua(w * k, x * k, y * k, z * k);};
+    constexpr qua& operator*=(T k) {w *= k;x *= k;y *= k;z *= k;return *this;}
+    constexpr qua operator/(T k) const {return qua(w / k, x / k, y / k, z / k);};
+    constexpr qua& operator/=(T k) {w /= k;x /= k;y /= k;z /= k;return *this;}
+    constexpr qua operator+(qua k) const {return qua(w+k.w, x+k.x, y+k.y, z+k.z);}
+    constexpr qua& operator+=(qua k) {w += k.w;x += k.x;y += k.y;z += k.z;return *this;}
+    constexpr qua operator-(qua k) const {return qua(w-k.w, x-k.x, y-k.y, z-k.z);}
+    constexpr qua& operator-=(qua k) {w -= k.w;x -= k.x;y -= k.y;z -= k.z;return *this;}
     constexpr qua operator/(qua k) const {return *this * k.inverse();}
     constexpr qua& operator/=(qua k) {return *this *= k.inverse();}
-    constexpr bool operator==(qua k) const {return x == k.x && y == k.y && z == k.z && w == k.w;}
-    constexpr bool operator!=(qua k) const {return x != k.x || y != k.y || z != k.z || w != k.w;}
+    constexpr bool operator==(qua k) const {return w == k.w && x == k.x && y == k.y && z == k.z;}
+    constexpr bool operator!=(qua k) const {return w != k.w || x != k.x || y != k.y || z != k.z;}
     constexpr qua operator*(qua k) const {
         T a = k.w, b = k.x, c = k.y, d = k.z;
         return {
