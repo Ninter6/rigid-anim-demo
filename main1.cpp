@@ -207,7 +207,7 @@ struct Cube {
     vec3 cnt{.5}; // centre of rotation
     quat rot{}; // rotation
 
-    mat4 matrix() const {
+    [[nodiscard]] mat4 matrix() const {
         auto ts = mat4::zero();
         ts[0][0] = ext.x;
         ts[1][1] = ext.y;
@@ -215,7 +215,7 @@ struct Cube {
         ts[3] = vec4{-cnt, 1.f};
         return local() * ts;
     }
-    mat4 local() const {
+    [[nodiscard]] mat4 local() const {
         auto tr = rotate(rot);
         tr[3] = vec4{pos, 1.f};
         return tr;
@@ -349,8 +349,8 @@ struct Animation {
 
     void apply_to_model(float t, Model& m) const;
 
-    vec3 pos_at(uint32_t id, float t) const;
-    quat rot_at(uint32_t id, float t) const;
+    [[nodiscard]] vec3 pos_at(uint32_t id, float t) const;
+    [[nodiscard]] quat rot_at(uint32_t id, float t) const;
 
     std::unordered_map<uint32_t, axis_info> info;
     std::vector<key_vec3> pos;
@@ -590,37 +590,6 @@ void anim_manager::parse_bone(const nlohmann::json& j) {
         }
         a.calcu_grad();
     }
-
-    // if (j.contains("completed") && j["completed"] == false) {
-    //     assert(j.contains("joints") && j["joints"].is_object());
-    //     auto& jnts = it->second.joints;
-    //     std::map<uint32_t, uint32_t> p;
-    //     for (auto&& [k, v] : j["joints"].items()) {
-    //         auto [it, succ] = jnts.try_emplace(s2id(k));
-    //         if (!succ) {
-    //             std::cerr << "Duplicate joint: " << k << " in bone: " << j["name"] << std::endl;
-    //             continue;
-    //         }
-    //         auto& jnt = it->second;
-    //         assert(v.is_object());
-    //         if (v.contains("pos")) jnt.pos = j2vec3(v["pos"]);
-    //         if (v.contains("rot")) jnt.rot = j2quat(v["pos"]);
-    //         if (v.contains("parent"))
-    //             p.emplace(s2id(k), s2id(v["parent"].get<std::string>()));
-    //     }
-    //     for (auto&& [n, m] : p) {
-    //         Cube curr = { .pos = jnts[n].pos, .rot = jnts[n].rot };
-    //         Cube parent = { .pos = jnts[m].pos, .rot = jnts[m].rot };
-    //         auto t = parent.local() * curr.local();
-    //         curr.pos = t[3];
-    //         curr.rot = quat_cast(t);
-    //
-    //         // TODO
-    //     }
-    // }
-
-    // for (auto&& [n, a] : anims)
-    //     a.calcu_grad();
 }
 
 void add_model(const Model& m) {
@@ -648,7 +617,6 @@ int main() {
         auto m = anim.models["test"];
         anim.bones["man"].anims["run"].apply_to_model(glfwGetTime(), m);
 
-        // anim.models["test"].cubes[s2id("K0")].rot = quat({1, 0, 0}, glfwGetTime());
         add_model(m);
         draw_cube();
         clear_cube();

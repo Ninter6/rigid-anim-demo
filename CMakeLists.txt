@@ -23,7 +23,10 @@ target_compile_definitions(stb PRIVATE
         "STB_IMAGE_IMPLEMENTATION"
         "STB_IMAGE_RESIZE_IMPLEMENTATION"
         "STB_IMAGE_WRITE_IMPLEMENTATION")
-target_compile_options(stb PUBLIC -O3 -march=native -w)
+target_compile_options(stb PRIVATE -O3 -march=native -w)
 
 add_executable(tex tex.cpp)
 target_link_libraries(tex stb)
+
+add_executable(img_packer img_packer.cpp)
+target_link_libraries(img_packer stb)
